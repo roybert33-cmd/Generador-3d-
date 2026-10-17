@@ -31,7 +31,7 @@ button.g{background:var(--mut)}button:disabled{opacity:.4}
 <li>Súbelo aquí abajo.</li></ol></div>
 <div class="card"><h2>Generar con IA desde una foto (experimental)</h2>
 <p class="s">Usa un Space público de Hugging Face. Solo funciona en tu página de GitHub, no dentro de Claude.</p>
-<label>Space<input id="sp" type="text" value="JeffreyXiang/TRELLIS" style="width:60%;padding:6px;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg);font-size:.9rem"></label>
+<label>Space<input id="sp" type="text" value="microsoft/TRELLIS" style="width:60%;padding:6px;border-radius:8px;border:1px solid var(--mut);background:var(--bg);color:var(--fg);font-size:.9rem"></label>
 <input id="pf" type="file" accept="image/*" style="width:100%">
 <button id="ai" style="margin-top:8px">Generar modelo 3D</button>
 <pre id="log" class="s" style="white-space:pre-wrap;max-height:180px;overflow:auto;margin:8px 0 0"></pre></div>
@@ -161,31 +161,41 @@ $('dl').onclick=async()=>{
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([buf],{type:'model/stl'}));a.download='modelo.stl';a.click()};
 
 /* ---------- IA: Space de Hugging Face ---------- */
-const log=t=>{$('log').textContent=t};
+const logEl=$('log');let step='';
+const L=t=>{logEl.textContent+=t+'\n';logEl.scrollTop=1e9};
 $('ai').onclick=async()=>{
-  const f=$('pf').files[0];if(!f)return log('Elige una foto primero.');
+  logEl.textContent='';
+  const f=$('pf').files[0];if(!f)return L('Elige una foto primero.');
+  const space=$('sp').value.trim();
   $('ai').disabled=true;let client=null;
   try{
-    log('Cargando cliente...');
+    step='revisar el Space';L('1. Revisando '+space+'...');
+    const r=await fetch('https://huggingface.co/api/spaces/'+space);
+    if(r.status===404)throw new Error('ese Space no existe. Prueba con microsoft/TRELLIS');
+    const info=await r.json(),st=info.runtime&&info.runtime.stage;
+    L('   Estado: '+(st||'desconocido'));
+    if(['PAUSED','STOPPED','RUNTIME_ERROR','BUILD_ERROR','CONFIG_ERROR','NO_APP_FILE'].includes(st))throw new Error('el Space está en estado '+st+' y no responde. Prueba con otro Space');
+    step='cargar el cliente de Gradio';L('2. Cargando cliente...');
     const {Client,handle_file}=await import('https://cdn.jsdelivr.net/npm/@gradio/client@1/+esm');
-    log('Conectando con el Space (si estaba dormido puede tardar varios minutos)...');
-    client=await Client.connect($('sp').value.trim());
-    await client.predict('/start_session',{});
-    log('Preparando la imagen...');
+    step='conectar con el Space';L('3. Conectando (si estaba dormido puede tardar varios minutos)...');
+    client=await Client.connect(space);
+    step='iniciar sesión en el Space';await client.predict('/start_session',{});
+    step='subir y preparar la foto';L('4. Subiendo la foto...');
     const pre=await client.predict('/preprocess_image',{image:handle_file(f)});
-    log('Generando el 3D (puede tardar 1 a 3 minutos)...');
+    step='generar el 3D';L('5. Generando el 3D (1 a 3 minutos)...');
     await client.predict('/image_to_3d',{image:pre.data[0],multiimages:[],seed:0,ss_guidance_strength:7.5,ss_sampling_steps:12,slat_guidance_strength:3,slat_sampling_steps:12,multiimage_algo:'stochastic'});
-    log('Extrayendo el archivo GLB...');
+    step='extraer el GLB';L('6. Extrayendo el archivo GLB...');
     const out=await client.predict('/extract_glb',{mesh_simplify:0.95,texture_size:1024});
     const fd=out.data[1]||out.data[0],url=fd&&(fd.url||fd.path);
-    if(!url)throw new Error('El Space no devolvió un archivo');
+    if(!url)throw new Error('el Space no devolvió un archivo');
+    step='descargar el modelo';
     await loadModel('modelo.glb',await (await fetch(url)).arrayBuffer());
-    log('Listo. Ajusta el tamaño más abajo.');
+    L('Listo. Ajusta el tamaño más abajo.');
   }catch(e){
     let m=(e&&(e.message||e.msg))||JSON.stringify(e);
+    L('\nFalló al '+step+': '+m);
     try{if(client){const info=await client.view_api();
-      m+='\n\nEndpoints del Space:\n'+JSON.stringify(Object.fromEntries(Object.entries(info.named_endpoints||{}).map(([k,v])=>[k,(v.parameters||[]).map(q=>q.parameter_name)])))}}catch(_){}
-    log('Error: '+m);
+      L('\nEndpoints del Space:\n'+JSON.stringify(Object.fromEntries(Object.entries(info.named_endpoints||{}).map(([k,v])=>[k,(v.parameters||[]).map(q=>q.parameter_name)]))))}}catch(_){}
   }
   $('ai').disabled=false};
 </script></body></html>
